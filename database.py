@@ -53,10 +53,22 @@ def main():
     except Exception as e:
         logging.fatal(e)
         return
+    
+    deleteTable(conn)
+    
     data = load_table(conn)
     print(data)
+    data = [dict(row) for row in data]
+
+    #save it to a json file
+    import json
+    with open('data.json', 'w') as outfile:
+        json.dump(data, outfile, indent=4, sort_keys=True, default=str)
+
+
     # Close communication with the database.
     conn.close()
 
 if __name__ == "__main__":
     main()
+    

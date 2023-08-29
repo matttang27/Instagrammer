@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import os
@@ -6,7 +7,7 @@ import time
 import traceback
 import uuid
 from argparse import ArgumentParser, RawTextHelpFormatter
-import datetime
+
 import psycopg2
 import requests
 # Import environment variables
@@ -244,7 +245,7 @@ iDontFollowBack = [];
         print(traceback.format_exc())
 
 
-def getRandomMutual(conn):
+def getRandomMutual(conn,db):
     # get a random mutual account
     # randomMutual = random.choice(account["mutuals"])
     randomMutual = "a_blimp_in_the_night"
@@ -283,10 +284,13 @@ def getRandomMutual(conn):
             data = profile.find_element(By.CLASS_NAME, "x9f619").text.split("\n")
             print(data)
 
-
-            if (data[-1] == "Follow"):
-                #add account to dataToAdd
-                dataToAdd.append((data[0], "notChecked", None, 0, 0, 0, False, datetime.datetime.now()))
+            if db[data[0]] == None:
+              dataToAdd.append((data[0], data[-1], None, 0, 0, 0, False, None))
+            
+            else:
+                user = db[data[0]]
+                dataToAdd.append((data[0], data[-1], user["followrequest"], user["mutualcount"], user["followercount"], user["followingcount"], user["matthewinteract"], user["lastupdated"]))
+            
             profile_counter += 1
 
         if profile_counter == past_counter:
@@ -302,31 +306,33 @@ def getRandomMutual(conn):
         execute_values(cur, "UPSERT INTO accounts (username, status, followRequest, mutualCount, followerCount, followingCount, matthewInteract, lastUpdated) VALUES %s", dataToAdd)
     conn.commit()
 
-    
 
+def getProfileData(username):
+    driver.get(f"https://www.instagram.com/{username}/")
+    time.sleep(5)
 
-# Main function to execute the bot actions
-def main():
+    #get status
+    status = driver.find_elements(By.CLASS_NAME, "_aacl")[0].text
+    #get the follower, following, and mutual counts
+    elements = driver.find_elements(By.CLASS_NAME, "_ac2a")
+    num_mutuals = 0
     try:
-        login()
-        conn = databaseLogin()
-
-        create_table(conn)
-        db = load_table(conn)
-
-        getRandomMutual(conn)
-
-        # Implement the main bot logic here
-        # - Fetch accounts with mutuals
-        # - Follow accounts
-        # - Check for accounts that haven't followed back
-        # - Unfollow accounts if necessary
-        # - Monitor Matthew's actions
-        # - Implement settings check every X minutes
-
+        mutuals = driver.find_elements(By.CLASS_NAME, "_aaaj")[0]
+        num_mutuals = mutuals.text.split(" ")[-2]
     except Exception as e:
         print(traceback.format_exc())
+    print(int(elements[1].text), int(elements[2].text), int(num_mutuals))
+    return [status,int(elements[1].text), int(elements[2].text), int(num_mutuals)]
 
+def updateAccounts(conn,db):
+    for i in db.keys():
+        if (db[i]["lastupdated"] == None) or ((datetime.datetime.now() - db[i]["lastupdated"]).days > 7):
+            #update the account
+            data = getProfileData(i)
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET status = %s, mutualCount = %s, followerCount = %s, followingCount = %s, lastUpdated = %s WHERE username = %s", (data[0], data[3], data[1], data[2], datetime.datetime.now(), i))
+            conn.commit()
+        
 
 def create_table(conn):
     with conn.cursor() as cur:
@@ -338,15 +344,19 @@ def create_table(conn):
         conn.commit()
 
 def load_table(conn):
-    #load table into a 2d array
+    #load table into an ordereddict
     rows = None
+
+    data = {}
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM accounts")
         logging.debug("load_accounts(): status message: %s",
                       cur.statusmessage)
         rows = cur.fetchall()
         conn.commit()
-    return rows
+    for i in range(len(rows)):
+        data[rows[i]['username']] = rows[i]
+    return data
 
 
 def databaseLogin():
@@ -358,6 +368,35 @@ def databaseLogin():
         logging.fatal(e)
         return
     return conn
+
+# Main function to execute the bot actions
+def main():
+    try:
+        
+        conn = databaseLogin()
+
+        create_table(conn)
+
+        
+
+        login()
+
+            #getProfileData("matttang27")
+
+        getRandomMutual(conn,load_table(conn))
+
+        updateAccounts(conn,load_table(conn))
+
+        # Implement the main bot logic here
+        # - Fetch accounts with mutuals
+        # - Follow accounts
+        # - Check for accounts that haven't followed back
+        # - Unfollow accounts if necessary
+        # - Monitor Matthew's actions
+        # - Implement settings check every X minutes
+
+    except Exception as e:
+        print(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
