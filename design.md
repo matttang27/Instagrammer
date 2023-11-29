@@ -25,3 +25,26 @@ Every X minutes:
 - Get followers and following lists using this answer: https://stackoverflow.com/a/63056537 - requires selenium to use browser console
 - Check following - unfollow accounts that haven't followed back after X days, and update unfollowed list
 - Check followers - follow accounts with at least X mutuals that aren't in the pending or unfollowed list, and update followed list
+
+
+## Actual Step by Step implementation
+
+On start:
+
+- Sign-in to Instagram, Load database, Check followers and following lists of personal account.
+
+Repeatable:
+- Get a random mutual, by choosing a random person from accountData['mutuals']
+- Go through the follower list of the mutual, adding / updating the database.
+    - Make sure to stop earlier if the mutual has too many followers.
+    - If matthew is already following them, set matthewinteract to true.
+- Go through the database, checking accounts that haven't been updated in the past X days.
+    - Skip if matthewinteract is true.
+    - If they follow us, but we don't follow them, set matthewinteract to true.
+    - If the status is different from the status in database, set matthewinteract to true.
+    - If status is "Follow", and the number of mutuals is above the threshold, and not blacklisted, follow them.
+        - Then set the followrequest timestamp to now.
+    - If status is "Following", and they haven't followed back, and the followrequest timestamp is more than X days ago, unfollow them.
+        - Then set blacklisted to true.
+
+BONUS: detect people who have unfollowed us.

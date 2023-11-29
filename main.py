@@ -20,6 +20,9 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from database_functions import (create_table, databaseLogin, deleteTable,
+                                load_table, resetLastUpdated, saveDataToJSON)
+
 # import a env file with the following variables: USERNAME, PASSWORD
 
 load_dotenv()
@@ -33,15 +36,28 @@ from selenium.webdriver.chrome.options import Options
 
 # enable browser logging
 o = Options()
+#o.add_argument("--headless")
 o.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 driver = webdriver.Chrome(options=o)
+
+MUTUAL_REQUIREMENTS = 20
+DAY_LIMIT = 7
+
+STATUS_BUTTON_CLASS = "_ap30"
 
 
 # Function to log in to Instagram
 def login():
     driver.get("https://www.instagram.com/accounts/login/")
-    time.sleep(2)
+    time.sleep(5)
 
+    try:
+
+        username_input = driver.find_element(By.NAME, "username")
+    except:
+        print("requires captcha, waiting 1 minute")
+
+        time.sleep(60)
     username_input = driver.find_element(By.NAME, "username")
     password_input = driver.find_element(By.NAME, "password")
 
@@ -58,26 +74,43 @@ def login():
 def follow_account(username):
     driver.get(f"https://www.instagram.com/{username}/")
     time.sleep(2)
+    follow_button = None
+    try:
+        try:
+            follow_button = driver.find_elements(By.XPATH,"//*[contains(text(), 'Follow')]")
+            
+        except:
+            follow_button = driver.find_elements(By.XPATH,"//*[contains(text(), 'Follow Back')]")
 
-    follow_button = driver.find_element_by_css_selector("button:not([disabled])")
-    follow_button.click()
+        follow_button[0].click()
+    except:
+        print("Already followed!")
+    
     time.sleep(2)
 
 
 # Function to unfollow an account by username
 def unfollow_account(username):
+    log("to unfollow: " + username)
+
+    """
     driver.get(f"https://www.instagram.com/{username}/")
-    time.sleep(2)
+    time.sleep(4)
 
-    follow_button = driver.find_element_by_css_selector(
-        "button[aria-label='Following']"
-    )
-    follow_button.click()
-    time.sleep(2)
+    Disabling the unfollow, for now, just in case something bad happens.
+    try:
+        unfollow_button = driver.find_element(By.CLASS_NAME, "_acat")
+        print(unfollow_button.find_elements(By.CSS_SELECTOR,"*")[0].text)
+        unfollow_button.click()
+        time.sleep(2)
 
-    unfollow_button = driver.find_element_by_xpath("//button[text()='Unfollow']")
-    unfollow_button.click()
-    time.sleep(2)
+        second_button = driver.find_elements(By.XPATH,"//*[contains(text(), 'Unfollow')]")[-1]
+        second_button.click()
+        time.sleep(2)
+    except:
+        print("Not following")"""
+
+
 
 
 def findMutualAccounts():
@@ -220,6 +253,9 @@ iDontFollowBack = [];
         logs = driver.get_log("browser")
         print(logs)
         foundAccount = {}
+
+        foundAccount["followers"] = []
+        foundAccount["following"] = []
         for log in logs:
             if log["message"].split(" ")[2] == '"followers':
                 foundAccount["followers"] = log["message"].split(" ")[3][:-1].split(",")
@@ -245,10 +281,10 @@ iDontFollowBack = [];
         print(traceback.format_exc())
 
 
-def getRandomMutual(conn,db):
+def getRandomMutual(conn,db,accountData):
+    dictData = {user["username"]:user for user in db}
     # get a random mutual account
-    # randomMutual = random.choice(account["mutuals"])
-    randomMutual = "a_blimp_in_the_night"
+    randomMutual = random.choice(accountData["mutuals"])
     # go to account
     driver.get(f"https://www.instagram.com/{randomMutual}/followers/")
     time.sleep(5)
@@ -264,6 +300,11 @@ def getRandomMutual(conn,db):
     # if the length of profileList doesn't change 4 times in a row, break
     same_value_counter = 0
     past_counter = 1
+
+
+    # if there are too many accounts that you don't follow, the people on the bottom probably don't have a lot of mutuals.
+    follow_counter = 0
+
 
     dataToAdd = []
     while True:
@@ -284,14 +325,22 @@ def getRandomMutual(conn,db):
             data = profile.find_element(By.CLASS_NAME, "x9f619").text.split("\n")
             print(data)
 
-            if db[data[0]] == None:
-              dataToAdd.append((data[0], data[-1], None, 0, 0, 0, False, None))
+            if (data[-1] == "Follow"):
+                follow_counter += 1
+            
+            if dictData.get(data[0]):
+                user = dictData.get(data[0])
+                dataToAdd.append((data[0], data[-1], user["followrequest"], user["mutualcount"], user["followercount"], user["followingcount"], user["matthewinteract"], user["lastupdated"], user["blacklisted"]))
             
             else:
-                user = db[data[0]]
-                dataToAdd.append((data[0], data[-1], user["followrequest"], user["mutualcount"], user["followercount"], user["followingcount"], user["matthewinteract"], user["lastupdated"]))
+                #If matthew is already following them, set matthewinteract to true.
+                dataToAdd.append((data[0], data[-1], None, 0, 0, 0, (data[-1] == "Following"), None, False))
+                
             
             profile_counter += 1
+
+        if follow_counter >= 50:
+            break
 
         if profile_counter == past_counter:
             same_value_counter += 1
@@ -303,89 +352,229 @@ def getRandomMutual(conn,db):
     
     #add dataToAdd to database
     with conn.cursor() as cur:
-        execute_values(cur, "UPSERT INTO accounts (username, status, followRequest, mutualCount, followerCount, followingCount, matthewInteract, lastUpdated) VALUES %s", dataToAdd)
+        execute_values(cur, "UPSERT INTO accounts (username, status, followRequest, mutualCount, followerCount, followingCount, matthewInteract, lastUpdated, blacklisted) VALUES %s", dataToAdd)
     conn.commit()
 
 
 def getProfileData(username):
-    driver.get(f"https://www.instagram.com/{username}/")
-    time.sleep(5)
+    
 
     #get status
-    status = driver.find_elements(By.CLASS_NAME, "_aacl")[0].text
+    status = ""
+    while True:
+        try:
+            driver.get(f"https://www.instagram.com/{username}/")
+            time.sleep(10)
+            status = driver.find_elements(By.CLASS_NAME, STATUS_BUTTON_CLASS)[0].text
+            break
+        except IndexError:
+            #check if the page is unavailable, or if it's ratelimited.
+
+
+            unavailable = driver.find_elements(By.XPATH,"//*[contains(text(), 'Sorry, this page')]")
+            
+            if (len(unavailable) > 0):
+                print("Page unavailable, blacklisting")
+                log(username + " page unavailable, blacklisting")
+                return {"status":"Unavailable","followers":0,"following":0,"mutuals":0,"followback":False}
+            else:
+                print("Did not work, waiting 5 minutes")
+                #if the status button isn't found, it's probably because Instagram put us on cooldown. Wait 30 minutes and try again.
+                time.sleep(5*60)
+                print("Retrying...")
     #get the follower, following, and mutual counts
     elements = driver.find_elements(By.CLASS_NAME, "_ac2a")
+    followers = int(elements[1].text.replace(",",""))
+    following = int(elements[2].text.replace(",",""))
     num_mutuals = 0
     try:
         mutuals = driver.find_elements(By.CLASS_NAME, "_aaaj")[0]
-        num_mutuals = mutuals.text.split(" ")[-2]
+        num_mutuals = int(mutuals.text.split(" ")[-2].replace(",",""))
     except Exception as e:
-        print(traceback.format_exc())
-    print(int(elements[1].text), int(elements[2].text), int(num_mutuals))
-    return [status,int(elements[1].text), int(elements[2].text), int(num_mutuals)]
+        pass
 
-def updateAccounts(conn,db):
-    for i in db.keys():
-        if (db[i]["lastupdated"] == None) or ((datetime.datetime.now() - db[i]["lastupdated"]).days > 7):
-            #update the account
-            data = getProfileData(i)
-            with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET status = %s, mutualCount = %s, followerCount = %s, followingCount = %s, lastUpdated = %s WHERE username = %s", (data[0], data[3], data[1], data[2], datetime.datetime.now(), i))
-            conn.commit()
-        
-
-def create_table(conn):
-    with conn.cursor() as cur:
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS accounts (username TEXT PRIMARY KEY, status TEXT, followRequest TIMESTAMP, mutualCount INT, followerCount INT, followingCount INT, matthewInteract BOOLEAN, lastUpdated TIMESTAMP)"
-        )
-        logging.debug("create_accounts(): status message: %s",
-                      cur.statusmessage)
-        conn.commit()
-
-def load_table(conn):
-    #load table into an ordereddict
-    rows = None
-
-    data = {}
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM accounts")
-        logging.debug("load_accounts(): status message: %s",
-                      cur.statusmessage)
-        rows = cur.fetchall()
-        conn.commit()
-    for i in range(len(rows)):
-        data[rows[i]['username']] = rows[i]
-    return data
-
-
-def databaseLogin():
+    follow_back = False
 
     try:
-        db_url = os.getenv("DATABASE_URL")
-        conn = psycopg2.connect(db_url, application_name="Instagrammer", cursor_factory=psycopg2.extras.RealDictCursor)
-    except Exception as e:
-        logging.fatal(e)
-        return
-    return conn
+
+        driver.get(f"https://www.instagram.com/{username}/following/")
+        time.sleep(5)
+
+        
+        # scroll down
+        element = driver.find_element(By.CLASS_NAME, "_aano")
+        time.sleep(5)
+
+        verical_ordinate = 100
+        profileList = driver.find_elements(By.CLASS_NAME, "x1dm5mii")
+
+        driver.execute_script(
+            "arguments[0].scrollTop = arguments[1]", element, verical_ordinate
+        )
+
+        profileList = driver.find_elements(By.CLASS_NAME, "x1dm5mii")
+
+        profile = profileList[0]
+        data = profile.find_element(By.CLASS_NAME, "x9f619").text.split("\n")
+        if (data[0] == account["USERNAME"]):
+            follow_back = True
+    
+    except:
+        pass
+
+
+
+    print(username,status,followers,following,num_mutuals,follow_back)
+    return {"status":status,"followers":followers,"following":following,"mutuals":num_mutuals,"followback":follow_back}
+
+def updateAccounts(conn,db):
+    tableData = load_table(conn)
+    
+    dictData = {user["username"]:user for user in tableData}
+
+    for i in dictData.keys():
+
+        if (dictData[i]["lastupdated"] == None) or ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT)):
+            #update the account
+            data = getProfileData(i)
+
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), i))
+            conn.commit()
+
+            if (data["status"] == "Follow"):
+                user = dictData.get(i)
+                #If user blocked request, don't try to follow again
+                if (user["followrequest"] != None):
+                    print(i, "rejected follow request, blacklisted.")
+                    log(i + " rejected follow request, blacklisted.")
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE accounts SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
+                    conn.commit()
+                elif ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
+                    print("requested follow for", i)
+                    log("requested follow for " + i)
+                    follow_account(i)
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE accounts SET followrequest = %s WHERE username = %s", (datetime.datetime.now(), i))
+                    conn.commit()
+
+def log(message):
+    #open log.json, and add message with a timestamp
+
+    with open('log.json') as json_file:
+        data = json.load(json_file)
+        data.append({"time":datetime.datetime.now(),"message":message})
+        with open('log.json', 'w') as outfile:
+            json.dump(data, outfile, indent=4, sort_keys=True, default=str)
+
+def checkToUnfollow(conn,accountData):
+
+    #Unfollow if:
+
+    #Unfollowed us
+    #Removed us from following
+    #Did not follow back after request
+
+    tableData = load_table(conn)
+    
+    dictData = {user["username"]:user for user in tableData}
+
+    org_followers, org_following = [],[]
+    #open followerfollowing.json
+    with open('followerfollowing.json') as json_file:
+        data = json.load(json_file)
+        #get the list of followers and following
+        org_followers = data["followers"]
+        org_following = data["following"]
+    unfollowed = list(set(org_followers) - set(accountData["followers"]))
+    removed = list((set(org_following) - set(accountData["following"])) - set(unfollowed))
+
+    for i in dictData.keys():
+        if ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT)):
+            if (i in accountData["following"]):
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE accounts SET followrequest = %s WHERE username = %s", (None, i))
+                conn.commit()
+                if (not (i in accountData["followers"])):
+                    unfollow_account(i)
+                    print("unfollowed and blacklisted", i)
+                    log(i + " did not follow back: unfollowed and blacklisted")
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE accounts SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
+                    conn.commit()
+
+    for i in unfollowed:
+        #blacklist and unfollow them
+
+        if (dictData.get(i)):
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET blacklisted = %s WHERE username = %s", (True, i))
+            conn.commit()
+        else:
+            data = getProfileData(i)
+
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+            conn.commit()
+
+        unfollow_account(i)
+        print("unfollowed and blacklisted", i)
+        log(i + " unfollowed us: unfollowed and blacklisted")
+
+    for i in removed:
+        #blacklist them
+
+        if (dictData.get(i)):
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET blacklisted = %s WHERE username = %s", (True, i))
+            conn.commit()
+        else:
+            data = getProfileData(i)
+
+            with conn.cursor() as cur:
+                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+            conn.commit()
+        print("removed us: blacklisted", i)
+        log(i + " removed us: blacklisted")
+    
+    with open('followerfollowing.json', 'w') as outfile:
+        json.dump(accountData, outfile, indent=4, sort_keys=True, default=str)
+
+
 
 # Main function to execute the bot actions
 def main():
+    
     try:
-        
-        conn = databaseLogin()
 
-        create_table(conn)
-
+        log("bot starting...")
         
+        conn = databaseLogin()  
 
         login()
 
-            #getProfileData("matttang27")
+        while (True):
 
-        getRandomMutual(conn,load_table(conn))
+            accountData = getFollowersAndFollowing(account["USERNAME"])
 
-        updateAccounts(conn,load_table(conn))
+            
+
+            checkToUnfollow(conn,accountData)
+
+            updateAccounts(conn,load_table(conn))
+
+            saveDataToJSON(conn)
+
+            getRandomMutual(conn,load_table(conn),accountData)
+
+            saveDataToJSON(conn)
+
+            updateAccounts(conn,load_table(conn))
+
+
+        
+
 
         # Implement the main bot logic here
         # - Fetch accounts with mutuals
