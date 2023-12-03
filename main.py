@@ -31,6 +31,13 @@ account = {}
 account["USERNAME"] = os.getenv("USERNAME")
 account["PASSWORD"] = os.getenv("PASSWORD")
 
+ACCOUNT_SCHEMA = "(username TEXT PRIMARY KEY, status TEXT, followRequest TIMESTAMP, mutualCount INT, followerCount INT, followingCount INT, followBack BOOLEAN, matthewInteract BOOLEAN, lastUpdated TIMESTAMP, blacklisted BOOLEAN)"
+LOG_SCHEMA = "(time TIMESTAMP, message TEXT)"
+FOLLOWERFOLLOWING_SCHEMA = "(followers TEXT[], following TEXT[], mutuals TEXT[], iDontFollowBack TEXT[], dontFollowMeBack TEXT[])"
+
+ACCOUNT_PATH = account["USERNAME"] + ".accounts"
+LOG_PATH = account["USERNAME"] + ".log"
+FOLLOWERFOLLOWING_PATH = account["USERNAME"] + ".followerfollowing"
 # Create a new instance of the Chrome driver
 from selenium.webdriver.chrome.options import Options
 
@@ -90,8 +97,8 @@ def follow_account(username):
 
 
 # Function to unfollow an account by username
-def unfollow_account(username):
-    log("to unfollow: " + username)
+def unfollow_account(conn,username):
+    log(conn,"to unfollow: " + username)
 
     """
     driver.get(f"https://www.instagram.com/{username}/")
@@ -143,13 +150,13 @@ def getUserId(username):
         return None
 
 
-def getFollowersAndFollowing(username):
+def getFollowersAndFollowing(conn):
     try:
         driver.get("https://www.instagram.com")
         time.sleep(3)
         driver.execute_script(
             f"""
-                              const username = "{username}";"""
+                              const username = "{account["USERNAME"]}";"""
             + """
 
 /**
@@ -167,7 +174,7 @@ iDontFollowBack = [];
 
 (async () => {
   try {
-    console.log(`Process started! Give it a couple of seconds`);
+    console.log(conn,`Process started! Give it a couple of seconds`);
 
     const userQueryRes = await fetch(
       `https://www.instagram.com/web/search/topsearch/?query=${username}`
@@ -208,7 +215,7 @@ iDontFollowBack = [];
         });
     }
 
-    console.log("followers " + followers.map(x => x.username).toString() );
+    console.log(conn,"followers " + followers.map(x => x.username).toString() );
 
     after = null;
     has_next = true;
@@ -241,9 +248,9 @@ iDontFollowBack = [];
         });
     }
 
-    console.log("following "+ followings.map(x => x.username).toString() );
+    console.log(conn,"following "+ followings.map(x => x.username).toString() );
   } catch (err) {
-    console.log({ err });
+    console.log(conn,{ err });
   }
 })();"""
         )
@@ -356,7 +363,7 @@ def getRandomMutual(conn,db,accountData):
     conn.commit()
 
 
-def getProfileData(username):
+def getProfileData(conn,username):
     
 
     #get status
@@ -375,7 +382,7 @@ def getProfileData(username):
             
             if (len(unavailable) > 0):
                 print("Page unavailable, blacklisting")
-                log(username + " page unavailable, blacklisting")
+                log(conn,username + " page unavailable, blacklisting")
                 return {"status":"Unavailable","followers":0,"following":0,"mutuals":0,"followback":False}
             else:
                 print("Did not work, waiting 5 minutes")
@@ -436,10 +443,10 @@ def updateAccounts(conn,db):
 
         if (dictData[i]["lastupdated"] == None) or ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT)):
             #update the account
-            data = getProfileData(i)
+            data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), i))
+                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), i))
             conn.commit()
 
             if (data["status"] == "Follow"):
@@ -447,26 +454,24 @@ def updateAccounts(conn,db):
                 #If user blocked request, don't try to follow again
                 if (user["followrequest"] != None):
                     print(i, "rejected follow request, blacklisted.")
-                    log(i + " rejected follow request, blacklisted.")
+                    log(conn,i + " rejected follow request, blacklisted.")
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE accounts SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
+                        cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
                     conn.commit()
                 elif ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
                     print("requested follow for", i)
-                    log("requested follow for " + i)
+                    log(conn,"requested follow for " + i)
                     follow_account(i)
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE accounts SET followrequest = %s WHERE username = %s", (datetime.datetime.now(), i))
+                        cur.execute("UPDATE %s SET followrequest = %s WHERE username = %s", (ACCOUNT_PATH, datetime.datetime.now(), i))
                     conn.commit()
 
-def log(message):
-    #open log.json, and add message with a timestamp
+def log(conn,message):
+    #open LOG_PATH and add a new log
 
-    with open('log.json') as json_file:
-        data = json.load(json_file)
-        data.append({"time":datetime.datetime.now(),"message":message})
-        with open('log.json', 'w') as outfile:
-            json.dump(data, outfile, indent=4, sort_keys=True, default=str)
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO %s VALUES (%s, %s)", (LOG_PATH, datetime.datetime.now(), message))
+    conn.commit()
 
 def checkToUnfollow(conn,accountData):
 
@@ -476,70 +481,82 @@ def checkToUnfollow(conn,accountData):
     #Removed us from following
     #Did not follow back after request
 
-    tableData = load_table(conn)
+    tableData = load_table(conn, ACCOUNT_PATH)
     
     dictData = {user["username"]:user for user in tableData}
 
     org_followers, org_following = [],[]
-    #open followerfollowing.json
-    with open('followerfollowing.json') as json_file:
-        data = json.load(json_file)
-        #get the list of followers and following
-        org_followers = data["followers"]
-        org_following = data["following"]
+    #open FOLLOWERFOLLOWING_PATH and get the list of followers and following
+    followerfollowingData = {lst["type"]:lst for lst in load_table(conn, FOLLOWERFOLLOWING_PATH)}
+    org_followers = followerfollowingData["followers"]
+    org_following = followerfollowingData["following"]
     unfollowed = list(set(org_followers) - set(accountData["followers"]))
     removed = list((set(org_following) - set(accountData["following"])) - set(unfollowed))
 
     for i in dictData.keys():
         if ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT)):
+                
             if (i in accountData["following"]):
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE accounts SET followrequest = %s WHERE username = %s", (None, i))
+                    cur.execute("UPDATE %s SET followrequest = %s WHERE username = %s", (ACCOUNT_PATH, None, i))
                 conn.commit()
                 if (not (i in accountData["followers"])):
-                    unfollow_account(i)
+                    unfollow_account(conn,i)
                     print("unfollowed and blacklisted", i)
-                    log(i + " did not follow back: unfollowed and blacklisted")
+                    log(conn,i + " did not follow back: unfollowed and blacklisted")
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE accounts SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
+                        cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
                     conn.commit()
+            
+            else:
+
+                user = dictData.get(i)
+                #If user blocked request, don't try to follow again
+                print(i, "rejected follow request, blacklisted.")
+                log(conn,i + " rejected follow request, blacklisted.")
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
+                conn.commit()
 
     for i in unfollowed:
         #blacklist and unfollow them
 
         if (dictData.get(i)):
             with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET blacklisted = %s WHERE username = %s", (True, i))
+                cur.execute("UPDATE %s SET blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, True, i))
             conn.commit()
         else:
-            data = getProfileData(i)
+            data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
 
         unfollow_account(i)
         print("unfollowed and blacklisted", i)
-        log(i + " unfollowed us: unfollowed and blacklisted")
+        log(conn,i + " unfollowed us: unfollowed and blacklisted")
 
     for i in removed:
         #blacklist them
 
         if (dictData.get(i)):
             with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET blacklisted = %s WHERE username = %s", (True, i))
+                cur.execute("UPDATE %s SET blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, True, i))
             conn.commit()
         else:
-            data = getProfileData(i)
+            data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE accounts SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
         print("removed us: blacklisted", i)
-        log(i + " removed us: blacklisted")
-    
-    with open('followerfollowing.json', 'w') as outfile:
-        json.dump(accountData, outfile, indent=4, sort_keys=True, default=str)
+        log(conn,i + " removed us: blacklisted")
+
+    #update FOLLOWERFOLLOWING_PATH
+    with conn.cursor() as cur:
+        for i in accountData.keys():
+            cur.execute("UPDATE %s SET %s = %s", (FOLLOWERFOLLOWING_PATH, i, accountData[i]))
+    conn.commit()
 
 
 
@@ -548,29 +565,35 @@ def main():
     
     try:
 
-        log("bot starting...")
+        print("bot starting...")
         
-        conn = databaseLogin()  
+        conn = databaseLogin() 
+        
+        create_table(conn, ACCOUNT_PATH , ACCOUNT_SCHEMA)
+        create_table(conn, LOG_PATH, LOG_SCHEMA)
+        create_table(conn, FOLLOWERFOLLOWING_PATH, FOLLOWERFOLLOWING_SCHEMA)
 
         login()
 
+        
+
         while (True):
 
-            accountData = getFollowersAndFollowing(account["USERNAME"])
+            accountData = getFollowersAndFollowing(conn)
 
             
 
             checkToUnfollow(conn,accountData)
 
-            updateAccounts(conn,load_table(conn))
+            updateAccounts(conn,load_table(conn, ACCOUNT_PATH))
 
             saveDataToJSON(conn)
 
-            getRandomMutual(conn,load_table(conn),accountData)
+            getRandomMutual(conn,load_table(conn, ACCOUNT_PATH),accountData)
 
             saveDataToJSON(conn)
 
-            updateAccounts(conn,load_table(conn))
+            updateAccounts(conn,load_table(conn, ACCOUNT_PATH))
 
 
         
