@@ -358,7 +358,7 @@ def getRandomMutual(conn,db,accountData):
     
     #add dataToAdd to database
     with conn.cursor() as cur:
-        execute_values(cur, "UPSERT INTO accounts (username, status, followRequest, mutualCount, followerCount, followingCount, matthewInteract, lastUpdated, blacklisted) VALUES %s", dataToAdd)
+        execute_values(cur, "UPSERT INTO " + ACCOUNT_PATH + " (username, status, followRequest, mutualCount, followerCount, followingCount, matthewInteract, lastUpdated, blacklisted) VALUES %s", dataToAdd)
     conn.commit()
 
 
@@ -434,7 +434,7 @@ def getProfileData(conn,username):
     return {"status":status,"followers":followers,"following":following,"mutuals":num_mutuals,"followback":follow_back}
 
 def updateAccounts(conn,db):
-    tableData = load_table(conn)
+    tableData = load_table(conn,ACCOUNT_PATH)
     
     dictData = {user["username"]:user for user in tableData}
 
@@ -445,7 +445,7 @@ def updateAccounts(conn,db):
             data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), i))
+                cur.execute("UPDATE " + ACCOUNT_PATH + " SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), i))
             conn.commit()
 
             if (data["status"] == "Follow"):
@@ -455,21 +455,21 @@ def updateAccounts(conn,db):
                     print(i, "rejected follow request, blacklisted.")
                     log(conn,i + " rejected follow request, blacklisted.")
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
+                        cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                     conn.commit()
                 elif ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
                     print("requested follow for", i)
                     log(conn,"requested follow for " + i)
                     follow_account(i)
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE %s SET followrequest = %s WHERE username = %s", (ACCOUNT_PATH, datetime.datetime.now(), i))
+                        cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s WHERE username = %s", (datetime.datetime.now(), i))
                     conn.commit()
 
 def log(conn,message):
     #open LOG_PATH and add a new log
 
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO %s VALUES (%s, %s)", (LOG_PATH, datetime.datetime.now(), message))
+        cur.execute("INSERT INTO " + LOG_PATH + " VALUES (%s, %s)", (message, datetime.datetime.now()))
     conn.commit()
 
 def checkToUnfollow(conn,accountData):
@@ -497,14 +497,14 @@ def checkToUnfollow(conn,accountData):
                 
             if (i in accountData["following"]):
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE %s SET followrequest = %s WHERE username = %s", (ACCOUNT_PATH, None, i))
+                    cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s WHERE username = %s", (None, i))
                 conn.commit()
                 if (not (i in accountData["followers"])):
                     unfollow_account(conn,i)
                     print("unfollowed and blacklisted", i)
                     log(conn,i + " did not follow back: unfollowed and blacklisted")
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
+                        cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                     conn.commit()
             
             else:
@@ -514,7 +514,7 @@ def checkToUnfollow(conn,accountData):
                 print(i, "rejected follow request, blacklisted.")
                 log(conn,i + " rejected follow request, blacklisted.")
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE %s SET followrequest = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, None, True, i))
+                    cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                 conn.commit()
 
     for i in unfollowed:
@@ -522,16 +522,16 @@ def checkToUnfollow(conn,accountData):
 
         if (dictData.get(i)):
             with conn.cursor() as cur:
-                cur.execute("UPDATE %s SET blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, True, i))
+                cur.execute("UPDATE " + ACCOUNT_PATH + " SET blacklisted = %s WHERE username = %s", (True, i))
             conn.commit()
         else:
             data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+                cur.execute("UPDATE " + ACCOUNT_PATH + " SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
 
-        unfollow_account(i)
+        unfollow_account(conn,i)
         print("unfollowed and blacklisted", i)
         log(conn,i + " unfollowed us: unfollowed and blacklisted")
 
@@ -540,13 +540,13 @@ def checkToUnfollow(conn,accountData):
 
         if (dictData.get(i)):
             with conn.cursor() as cur:
-                cur.execute("UPDATE %s SET blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, True, i))
+                cur.execute("UPDATE " + ACCOUNT_PATH + " SET blacklisted = %s WHERE username = %s", ( True, i))
             conn.commit()
         else:
             data = getProfileData(conn,i)
 
             with conn.cursor() as cur:
-                cur.execute("UPDATE %s SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (ACCOUNT_PATH, data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
+                cur.execute("UPDATE " + ACCOUNT_PATH + " SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
         print("removed us: blacklisted", i)
         log(conn,i + " removed us: blacklisted")
@@ -554,7 +554,7 @@ def checkToUnfollow(conn,accountData):
     #update FOLLOWERFOLLOWING_PATH
     with conn.cursor() as cur:
         for i in accountData.keys():
-            cur.execute("UPDATE" + FOLLOWERFOLLOWING_PATH + " SET list = %s WHERE type = %s", (data[i],i))
+            cur.execute("UPDATE " + FOLLOWERFOLLOWING_PATH + " SET list = %s WHERE type = %s", (accountData[i],i))
 
     conn.commit()
 
@@ -587,11 +587,7 @@ def main():
 
             updateAccounts(conn,load_table(conn, ACCOUNT_PATH))
 
-            saveDataToJSON(conn)
-
             getRandomMutual(conn,load_table(conn, ACCOUNT_PATH),accountData)
-
-            saveDataToJSON(conn)
 
             updateAccounts(conn,load_table(conn, ACCOUNT_PATH))
 
