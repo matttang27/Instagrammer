@@ -174,7 +174,7 @@ iDontFollowBack = [];
 
 (async () => {
   try {
-    console.log(conn,`Process started! Give it a couple of seconds`);
+    console.log(`Process started! Give it a couple of seconds`);
 
     const userQueryRes = await fetch(
       `https://www.instagram.com/web/search/topsearch/?query=${username}`
@@ -215,7 +215,7 @@ iDontFollowBack = [];
         });
     }
 
-    console.log(conn,"followers " + followers.map(x => x.username).toString() );
+    console.log("followers " + followers.map(x => x.username).toString() );
 
     after = null;
     has_next = true;
@@ -248,9 +248,9 @@ iDontFollowBack = [];
         });
     }
 
-    console.log(conn,"following "+ followings.map(x => x.username).toString() );
+    console.log("following "+ followings.map(x => x.username).toString() );
   } catch (err) {
-    console.log(conn,{ err });
+    console.log({ err });
   }
 })();"""
         )
@@ -258,7 +258,6 @@ iDontFollowBack = [];
         time.sleep(10)
         # get the logs from the browser
         logs = driver.get_log("browser")
-        print(logs)
         foundAccount = {}
 
         foundAccount["followers"] = []
@@ -487,7 +486,7 @@ def checkToUnfollow(conn,accountData):
 
     org_followers, org_following = [],[]
     #open FOLLOWERFOLLOWING_PATH and get the list of followers and following
-    followerfollowingData = {lst["type"]:lst for lst in load_table(conn, FOLLOWERFOLLOWING_PATH)}
+    followerfollowingData = {lst["type"]:lst["list"] for lst in load_table(conn, FOLLOWERFOLLOWING_PATH)}
     org_followers = followerfollowingData["followers"]
     org_following = followerfollowingData["following"]
     unfollowed = list(set(org_followers) - set(accountData["followers"]))
@@ -555,7 +554,8 @@ def checkToUnfollow(conn,accountData):
     #update FOLLOWERFOLLOWING_PATH
     with conn.cursor() as cur:
         for i in accountData.keys():
-            cur.execute("UPDATE %s SET %s = %s", (FOLLOWERFOLLOWING_PATH, i, accountData[i]))
+            cur.execute("UPDATE" + FOLLOWERFOLLOWING_PATH + " SET list = %s WHERE type = %s", (data[i],i))
+
     conn.commit()
 
 
