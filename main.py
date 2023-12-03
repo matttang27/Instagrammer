@@ -34,10 +34,13 @@ account["PASSWORD"] = os.getenv("PASSWORD")
 ACCOUNT_SCHEMA = "(username TEXT PRIMARY KEY, status TEXT, followRequest TIMESTAMP, mutualCount INT, followerCount INT, followingCount INT, followBack BOOLEAN, matthewInteract BOOLEAN, lastUpdated TIMESTAMP, blacklisted BOOLEAN)"
 LOG_SCHEMA = "(time TIMESTAMP, message TEXT)"
 FOLLOWERFOLLOWING_SCHEMA = "(followers TEXT[], following TEXT[], mutuals TEXT[], iDontFollowBack TEXT[], dontFollowMeBack TEXT[])"
+ACTIONS_SCHEMA = "(action TEXT, time TIMESTAMP, username TEXT, details TEXT)"
+
 
 ACCOUNT_PATH = account["USERNAME"] + ".accounts"
 LOG_PATH = account["USERNAME"] + ".log"
 FOLLOWERFOLLOWING_PATH = account["USERNAME"] + ".followerfollowing"
+ACTIONS_PATH = account["USERNAME"] + ".actions"
 # Create a new instance of the Chrome driver
 from selenium.webdriver.chrome.options import Options
 
@@ -98,7 +101,7 @@ def follow_account(username):
 
 # Function to unfollow an account by username
 def unfollow_account(conn,username):
-    log(conn,"to unfollow: " + username)
+    
 
     """
     driver.get(f"https://www.instagram.com/{username}/")
@@ -381,7 +384,8 @@ def getProfileData(conn,username):
             
             if (len(unavailable) > 0):
                 print("Page unavailable, blacklisting")
-                log(conn,username + " page unavailable, blacklisting")
+                
+                action(conn,"blacklist",username, "reason: page unavailable")
                 return {"status":"Unavailable","followers":0,"following":0,"mutuals":0,"followback":False}
             else:
                 print("Did not work, waiting 5 minutes")
@@ -453,23 +457,24 @@ def updateAccounts(conn,db):
                 #If user blocked request, don't try to follow again
                 if (user["followrequest"] != None):
                     print(i, "rejected follow request, blacklisted.")
-                    log(conn,i + " rejected follow request, blacklisted.")
+                    action(conn,"blacklist",i, "reason: rejected follow request")
                     with conn.cursor() as cur:
                         cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                     conn.commit()
                 elif ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
                     print("requested follow for", i)
-                    log(conn,"requested follow for " + i)
+                    
+                    action(conn,"follow request",i,None)
                     follow_account(i)
                     with conn.cursor() as cur:
                         cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s WHERE username = %s", (datetime.datetime.now(), i))
                     conn.commit()
 
-def log(conn,message):
-    #open LOG_PATH and add a new log
+def action(conn,action,username,details):
+    #open ACTIONS_PATH and add new action
 
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO " + LOG_PATH + " VALUES (%s, %s)", (message, datetime.datetime.now()))
+        cur.execute("INSERT INTO " + ACTIONS_PATH + " VALUES (%s, %s, %s, %s)", (action, datetime.datetime.now(), username, details))
     conn.commit()
 
 def checkToUnfollow(conn,accountData):
@@ -502,7 +507,9 @@ def checkToUnfollow(conn,accountData):
                 if (not (i in accountData["followers"])):
                     unfollow_account(conn,i)
                     print("unfollowed and blacklisted", i)
-                    log(conn,i + " did not follow back: unfollowed and blacklisted")
+                    
+                    action(conn,"blacklist",i, "reason: did not follow back")
+                    action(conn,"unfollow",i, "reason: did not follow back")
                     with conn.cursor() as cur:
                         cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                     conn.commit()
@@ -512,7 +519,7 @@ def checkToUnfollow(conn,accountData):
                 user = dictData.get(i)
                 #If user blocked request, don't try to follow again
                 print(i, "rejected follow request, blacklisted.")
-                log(conn,i + " rejected follow request, blacklisted.")
+                action(conn,"blacklist",i, "reason: rejected follow request")
                 with conn.cursor() as cur:
                     cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
                 conn.commit()
@@ -533,7 +540,8 @@ def checkToUnfollow(conn,accountData):
 
         unfollow_account(conn,i)
         print("unfollowed and blacklisted", i)
-        log(conn,i + " unfollowed us: unfollowed and blacklisted")
+        
+        action(conn,"blacklist",i, "reason: unfollowed us")
 
     for i in removed:
         #blacklist them
@@ -549,7 +557,8 @@ def checkToUnfollow(conn,accountData):
                 cur.execute("UPDATE " + ACCOUNT_PATH + " SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
         print("removed us: blacklisted", i)
-        log(conn,i + " removed us: blacklisted")
+        
+        action(conn,"blacklist",i, "reason: removed us")
 
     #update FOLLOWERFOLLOWING_PATH
     with conn.cursor() as cur:
@@ -572,6 +581,7 @@ def main():
         create_table(conn, ACCOUNT_PATH , ACCOUNT_SCHEMA)
         create_table(conn, LOG_PATH, LOG_SCHEMA)
         create_table(conn, FOLLOWERFOLLOWING_PATH, FOLLOWERFOLLOWING_SCHEMA)
+        create_table(conn, ACTIONS_PATH, ACTIONS_SCHEMA)
 
         login()
 
