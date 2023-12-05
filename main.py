@@ -41,6 +41,8 @@ ACCOUNT_PATH = account["USERNAME"] + ".accounts"
 LOG_PATH = account["USERNAME"] + ".log"
 FOLLOWERFOLLOWING_PATH = account["USERNAME"] + ".followerfollowing"
 ACTIONS_PATH = account["USERNAME"] + ".actions"
+FOLLOW_PER_DAY_LIMIT = 100
+VIEW_PER_HOUR_LIMIT = 40
 # Create a new instance of the Chrome driver
 from selenium.webdriver.chrome.options import Options
 
@@ -342,8 +344,10 @@ def getRandomMutual(conn,db,accountData):
                 dataToAdd.append((data[0], data[-1], user["followrequest"], user["mutualcount"], user["followercount"], user["followingcount"], user["matthewinteract"], user["lastupdated"], user["blacklisted"]))
             
             else:
-                #If matthew is already following them, set matthewinteract to true.
-                dataToAdd.append((data[0], data[-1], None, 0, 0, 0, (data[-1] == "Following"), None, False))
+                action(conn,"add",data[0], None)
+                #If we are already following them, or they are following us set matthewinteract to true.
+
+                dataToAdd.append((data[0], data[-1], None, 0, 0, 0, (data[-1] == "Following" or data[-1] == "Follow Back"), None, False))
                 
             
             profile_counter += 1
@@ -367,6 +371,7 @@ def getRandomMutual(conn,db,accountData):
 
 def getProfileData(conn,username):
     
+    action(conn,"view",username, None)
 
     #get status
     status = ""
@@ -441,10 +446,42 @@ def updateAccounts(conn,db):
     tableData = load_table(conn,ACCOUNT_PATH)
     
     dictData = {user["username"]:user for user in tableData}
+    
+
+    followerfollowingData = {lst["type"]:lst["list"] for lst in load_table(conn, FOLLOWERFOLLOWING_PATH)}
+    viewActions = 0
+    #check how many view actions have been done in the last hour
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM " + ACTIONS_PATH + " WHERE time > %s AND action = %s", (datetime.datetime.now() - datetime.timedelta(hours=1),"view"))
+        viewActions = len(cur.fetchall())
+    conn.commit()
+
+    #check how many follow actions have been done in the last day
+    followActions = 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM " + ACTIONS_PATH + " WHERE time > %s AND action = %s", (datetime.datetime.now() - datetime.timedelta(days=1),"follow request"))
+        followActions = len(cur.fetchall())
+    conn.commit()
+
+    print(viewActions,followActions)
+
+    
+    
+
 
     for i in dictData.keys():
+        user = dictData.get(i)
+        if (viewActions > VIEW_PER_HOUR_LIMIT):
+            #wait an hour
+            print("waiting an hour")
+            time.sleep(60*60)
 
-        if (dictData[i]["lastupdated"] == None) or ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT)):
+        if (followActions > FOLLOW_PER_DAY_LIMIT):
+            #wait a day
+            print("waiting a day")
+            time.sleep(60*60*24)
+
+        if ((not user["matthewinteract"]) and (not user["blacklisted"])) and ((dictData[i]["lastupdated"] == None) or ((dictData[i]["followrequest"] != None) and ((datetime.datetime.now() - dictData[i]["lastupdated"]).days > DAY_LIMIT))):
             #update the account
             data = getProfileData(conn,i)
 
@@ -453,15 +490,9 @@ def updateAccounts(conn,db):
             conn.commit()
 
             if (data["status"] == "Follow"):
-                user = dictData.get(i)
-                #If user blocked request, don't try to follow again
-                if (user["followrequest"] != None):
-                    print(i, "rejected follow request, blacklisted.")
-                    action(conn,"blacklist",i, "reason: rejected follow request")
-                    with conn.cursor() as cur:
-                        cur.execute("UPDATE " + ACCOUNT_PATH + " SET followrequest = %s, blacklisted = %s WHERE username = %s", (None, True, i))
-                    conn.commit()
-                elif ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
+                
+                
+                if ((not (user["matthewinteract"] or user["blacklisted"])) and (data["mutuals"] > MUTUAL_REQUIREMENTS)):
                     print("requested follow for", i)
                     
                     action(conn,"follow request",i,None)
