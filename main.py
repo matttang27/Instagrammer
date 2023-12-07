@@ -32,17 +32,17 @@ account["USERNAME"] = os.getenv("USERNAME")
 account["PASSWORD"] = os.getenv("PASSWORD")
 
 ACCOUNT_SCHEMA = "(username TEXT PRIMARY KEY, status TEXT, followRequest TIMESTAMP, mutualCount INT, followerCount INT, followingCount INT, followBack BOOLEAN, matthewInteract BOOLEAN, lastUpdated TIMESTAMP, blacklisted BOOLEAN)"
-LOG_SCHEMA = "(time TIMESTAMP, message TEXT)"
 FOLLOWERFOLLOWING_SCHEMA = "(followers TEXT[], following TEXT[], mutuals TEXT[], iDontFollowBack TEXT[], dontFollowMeBack TEXT[])"
 ACTIONS_SCHEMA = "(action TEXT, time TIMESTAMP, username TEXT, details TEXT)"
 
 
 ACCOUNT_PATH = account["USERNAME"] + ".accounts"
-LOG_PATH = account["USERNAME"] + ".log"
+
 FOLLOWERFOLLOWING_PATH = account["USERNAME"] + ".followerfollowing"
 ACTIONS_PATH = account["USERNAME"] + ".actions"
-FOLLOW_PER_DAY_LIMIT = 100
-VIEW_PER_HOUR_LIMIT = 40
+FOLLOW_PER_DAY_LIMIT = 50
+VIEW_PER_HOUR_LIMIT = 20
+VIEW_PER_DAY_LIMIT = 100
 # Create a new instance of the Chrome driver
 from selenium.webdriver.chrome.options import Options
 
@@ -105,11 +105,10 @@ def follow_account(username):
 def unfollow_account(conn,username):
     
 
-    """
+   
     driver.get(f"https://www.instagram.com/{username}/")
     time.sleep(4)
 
-    Disabling the unfollow, for now, just in case something bad happens.
     try:
         unfollow_button = driver.find_element(By.CLASS_NAME, "_acat")
         print(unfollow_button.find_elements(By.CSS_SELECTOR,"*")[0].text)
@@ -120,13 +119,7 @@ def unfollow_account(conn,username):
         second_button.click()
         time.sleep(2)
     except:
-        print("Not following")"""
-
-
-
-
-def findMutualAccounts():
-    driver.get("https://www.instagram.com/accounts/access_tool/current_follow_requests")
+        print("Not following")
 
 
 def getUserId(username):
@@ -475,8 +468,9 @@ def updateAccounts(conn,db):
             #wait an hour
             print("waiting an hour")
             time.sleep(60*60)
+        
 
-        if (followActions > FOLLOW_PER_DAY_LIMIT):
+        if (followActions > FOLLOW_PER_DAY_LIMIT or viewActions > VIEW_PER_DAY_LIMIT):
             #wait a day
             print("waiting a day")
             time.sleep(60*60*24)
@@ -507,6 +501,27 @@ def action(conn,action,username,details):
     with conn.cursor() as cur:
         cur.execute("INSERT INTO " + ACTIONS_PATH + " VALUES (%s, %s, %s, %s)", (action, datetime.datetime.now(), username, details))
     conn.commit()
+
+
+#Check the actions database to find accounts that need to be unfollowed
+def checkActionsForUnfollow(conn):
+    #open ACTIONS_PATH and get the list of actions
+    actionData = load_table(conn, ACTIONS_PATH)
+
+    
+    #find all the accounts that need to be unfollowed
+    unfollowed = [action["username"] for action in actionData if action["action"] == "unfollow"]
+    #unfollow them
+    counter = 0
+    for i in unfollowed:
+        unfollow_account(conn,i)
+        counter += 1
+        print("unfollowed", i, counter, "out of", len(unfollowed))
+    
+        
+        
+
+
 
 def checkToUnfollow(conn,accountData):
 
@@ -575,9 +590,14 @@ def checkToUnfollow(conn,accountData):
         action(conn,"blacklist",i, "reason: unfollowed us")
 
     for i in removed:
+
+        
+        
         #blacklist them
 
         if (dictData.get(i)):
+            if (dictData[i]["blacklisted"]):
+                break
             with conn.cursor() as cur:
                 cur.execute("UPDATE " + ACCOUNT_PATH + " SET blacklisted = %s WHERE username = %s", ( True, i))
             conn.commit()
@@ -587,6 +607,8 @@ def checkToUnfollow(conn,accountData):
             with conn.cursor() as cur:
                 cur.execute("UPDATE " + ACCOUNT_PATH + " SET status = %s, followerCount = %s, followingCount = %s, mutualCount = %s, followBack = %s, lastUpdated = %s, blacklisted = %s WHERE username = %s", (data["status"], data["followers"], data["following"], data["mutuals"], data["followback"], datetime.datetime.now(), True, i))
             conn.commit()
+
+        
         print("removed us: blacklisted", i)
         
         action(conn,"blacklist",i, "reason: removed us")
@@ -610,7 +632,6 @@ def main():
         conn = databaseLogin() 
         
         create_table(conn, ACCOUNT_PATH , ACCOUNT_SCHEMA)
-        create_table(conn, LOG_PATH, LOG_SCHEMA)
         create_table(conn, FOLLOWERFOLLOWING_PATH, FOLLOWERFOLLOWING_SCHEMA)
         create_table(conn, ACTIONS_PATH, ACTIONS_SCHEMA)
 
